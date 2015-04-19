@@ -1,162 +1,389 @@
 <?php
 
-//Please input your restful API key here.
-$apikey = "";
-$api_url = "http://api.page2images.com/restfullink";
-
-
-//It is the simplest way to call it. Of cause, you can remove it as needed.
-call_p2i();
-
-function call_p2i()
+class page2image
 {
-    global $apikey, $api_url;
-    // URL can be those formats: http://www.google.com https://google.com google.com and www.google.com
-    // But free rate plan does not support SSL link.
-    $url = "http://www.google.com";
-    $device = 0; // 0 - iPhone4, 1 - iPhone5, 2 - Android, 3 - WinPhone, 4 - iPad, 5 - Android Pad, 6 - Desktop
-    $loop_flag = TRUE;
-    $timeout = 120; // timeout after 120 seconds
-    set_time_limit($timeout+10);
-    $start_time = time();
-    $timeout_flag = false;
+	private $api_timeout = 120;
+	private $api_url     = 'http://api.page2images.com/restfullink';
+	private $params      = array();
+	
+	function __construct($options_array = NULL)
+	{
+		if ($options_array)
+		{
+			$this->setOptions($options_array);
+		}
+	}
+	
+	private function checkRequiredParams()
+	{
+		// check required properties have been set
+		if (!$this->params['p2i_key'])
+		{
+			$missing[] = 'API key';
+		}
+		if (!$this->params['p2i_url'])
+		{
+			$missing[] = 'URL';
+		}
+		
+		// was anything missing?
+		if ($missing)
+		{
+			$list = implode(', ',$missing);
+			throw new Exception ('Call cannot be made, required properties are missing ('.$list.')');
+		}
+		
+		// if image quality is set, check it is within required ranges
+		if ($this->params['p2i_quality'])
+		{
+			$format  = $this->params['p2i_imageformat'];
+			$quality = $this->params['p2i_quality'];
+			
+			if (($format == 'png' || !$format) && ($quality < 70 || $quality > 85))
+			{
+				throw new Exception ('Image quality must be between 70 and 85 for png');
+			}
+			else if ($format == 'jpg' && ($quality < 80 || $quality > 95))
+			{
+				throw new Exception ('Image quality must be between 80 and 95 for jpg');
+			}
+		}
+	}
+	
+	private function curl()
+	{
+		$ch = curl_init();
+		
+		curl_setopt($ch, CURLOPT_URL, $this->api_url);
+		curl_setopt($ch, CURLOPT_HEADER, 0);
+		curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+		curl_setopt($ch, CURLOPT_POST, 1);
+		curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($this->params));
+		curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 30);
+		curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+		
+		$data = curl_exec($ch);
+		curl_close($ch);
+		
+		return $data;
+	}
+	
+	public function call($options_array = NULL, $reset = false)
+	{
+		if ($options_array)
+		{
+			$this->setOptions($options_array, $reset);
+		}
+		
+		$this->checkRequiredParams();
 
-    while ($loop_flag) {
-        // We need call the API until we get the screenshot or error message
-        try {
-            $para = array(
-                "p2i_url" => $url,
-                "p2i_key" => $apikey,
-                "p2i_device" => $device
-            );
-            // connect page2images server
-            $response = connect($api_url, $para);
+		// the code up to the end of this method is based on the sample code from http://www.page2images.com/REST-Web-Service-Interface
+		$loop_flag  = true;
+		$start_time = time();
+		set_time_limit($this->api_timeout+10);
+		
+		while ($loop_flag)
+		{
+			// We need to call the API until we get the screenshot or error message
+			$response = $this->curl();
+			
+			if (empty($response))
+			{
+				$loop_flag = false;
+				$error = 'The page2images API did not respond';
+				break;
+			}
+			else
+			{
+				$json_data = json_decode($response);
+				
+				if (empty($json_data->status))
+				{
+					$loop_flag = false;
+					$error = 'The page2images API returned incomplete data (no status)';
+					break;
+				}
+			}
+			
+			switch ($json_data->status)
+			{
+				case 'error':
+					$loop_flag = false;
+					$error = 'The page2images API returned error #'.$json_data->errno.': '.$json_data->msg;
+					break;
+				case 'finished':
+					$url = $json_data->image_url;
+					$loop_flag = false;
+					break;
+				case 'processing':
+				default:
+					if ((time() - $start_time) > $this->api_timeout)
+					{
+						$loop_flag = false;
+						$error = 'Request timeout after '.$this->api_timeout.' seconds';
+					}
+					else
+					{
+						sleep(2);
+					}
+					break;
+			}
+		}
+		
+		if ($error)
+		{
+			$return->status = 'ERR';
+			$return->error  = $error;
+		}
+		else
+		{
+			$return->status = 'OK';
+			$return->url    = $url;
+		}
+		
+		return $return;
+	}
+	
+	public function reset()
+	{
+		// store the API key
+		$key = $this->params['p2i_key'];
+		
+		// re-declare the params array with only the API key
+		$this->params = array('p2i_key' => $key);
+	}
+	
+	public function setOptions($options_array, $reset = false)
+	{
+		if ($reset == true)
+		{
+			$this->reset();
+		}
+		
+		$a = $options_array;
+		
+		// check incoming
+		if (!is_array($a))
+		{
+			throw new Exception ('Input must be array for '.__METHOD__);
+		}
+		
+		// assign variables
+		if (array_key_exists('api_key',$a))
+		{
+			$this->setApiKey($a['api_key']);
+			unset($a['api_key']);
+		}
+		if (array_key_exists('api_timeout',$a))
+		{
+			$this->setApiTimeout($a['api_timeout']);
+			unset($a['api_timeout']);
+		}
+		if (array_key_exists('device',$a))
+		{
+			$this->setDevice($a['device']);
+			unset($a['device']);
+		}
+		if (array_key_exists('image_format',$a))
+		{
+			$this->setImageFormat($a['image_format']);
+			unset($a['image_format']);
+		}
+		if (array_key_exists('js',$a))
+		{
+			$this->setJs($a['js']);
+			unset($a['js']);
+		}
+		if (array_key_exists('refresh',$a))
+		{
+			$this->setRefresh($a['refresh']);
+			unset($a['refresh']);
+		}
+		if (array_key_exists('screen',$a))
+		{
+			$this->setScreen($a['screen']);
+			unset($a['screen']);
+		}
+		if (array_key_exists('size',$a))
+		{
+			$this->setSize($a['size']);
+			unset($a['size']);
+		}
+		if (array_key_exists('quality',$a))
+		{
+			$this->setQuality($a['quality']);
+			unset($a['quality']);
+		}
+		if (array_key_exists('wait',$a))
+		{
+			$this->setWait($a['wait']);
+			unset($a['wait']);
+		}
+		if (array_key_exists('url',$a))
+		{
+			$this->setUrl($a['url']);
+			unset($a['url']);
+		}
+		
+		// any left over options?
+		if (count($a) > 0)
+		{
+			// get each key left in the array
+			foreach ($a as $k => $v)
+			{
+				$list[] = $k;
+			}
+			$list = implode(', ',$list);
+			
+			throw new Exception ('Input array contained unknown keys ('.$list.') for '.__METHOD__);
+		}
+	}
+	
+	public function setApiKey($api_key)
+	{
+		if (!is_string($api_key))
+		{
+			throw new Exception ('API key must be a string');
+		}
+		
+		$this->params['p2i_key'] = $api_key;
+	}
+	
+	public function setApiTimeout($seconds_to_timeout)
+	{
+		$s = floor($seconds_to_timeout);
+		
+		if ($s < 10 || $s > 180)
+		{
+			throw new Exception ('API timeout must be between 10 and 180 seconds');
+		}
+		
+		$this->api_timeout = $s;
+	}
+	
+	public function setDevice($device_id)
+	{
+		$valid = array('0','1','2','3','4','5','6','7','8');
+		if (!in_array($device_id,$valid))
+		{
+			throw new Exception ('Device ID must be an integer between 0 and 8 (strings accepted)');
+		}
+		$this->params['p2i_device'] = (string) $device_id;
+	}
+	
+	public function setImageFormat($format)
+	{
+		$f = strtolower($format);
+		
+		$valid = array('jpg','pdf','png');
+		if (!in_array($f,$valid))
+		{
+			throw new Exception ('Image format must be jpg, pdf or png');
+		}
+		$this->params['p2i_imageformat'] = $f;
+	}
+	
+	public function setJs($bool)
+	{
+		if ($bool == false || $bool == 'false')
+		{
+			$this->params['p2i_js'] == '0';
+		}
+		else if ($bool == '1' || $bool === true || $bool == 'true')
+		{
+			$this->params['p2i_js'] == '1';
+		}
+		else
+		{
+			throw new Exception ('JS must be boolean or string (true, false, 1, 0)');
+		}
+	}
 
-            if (empty($response)) {
-                $loop_flag = FALSE;
-                // something error
-                echo "something error";
-                break;
-            } else {
-                $json_data = json_decode($response);
-                if (empty($json_data->status)) {
-                    $loop_flag = FALSE;
-                    // api error
-                    break;
-                }
-            }
-            switch ($json_data->status) {
-                case "error":
-                    // do something to handle error
-                    $loop_flag = FALSE;
-                    echo $json_data->errno . " " . $json_data->msg;
-                    break;
-                case "finished":
-                    // do something with finished. For example, show this image
-                    echo "<img src='$json_data->image_url'>";
-                    // Or you can download the image from our server
-                    $loop_flag = FALSE;
-                    break;
-                case "processing":
-                default:
-                    if ((time() - $start_time) > $timeout) {
-                        $loop_flag = false;
-                        $timeout_flag = true; // set the timeout flag. You can handle it later.
-                    } else {
-                        sleep(3); // This only work on windows.
-                    }
-                    break;
-            }
-        } catch (Exception $e) {
-            // Do whatever you think is right to handle the exception.
-            $loop_flag = FALSE;
-            echo 'Caught exception: ', $e->getMessage(), "\n";
-        }
-    }
+	public function setRefresh($bool)
+	{
+		if ($bool == false || $bool == 'false')
+		{
+			$this->params['p2i_refresh'] == '0';
+		}
+		else if ($bool == '1' || $bool === true || $bool == 'true')
+		{
+			$this->params['p2i_refresh'] == '1';
+		}
+		else
+		{
+			throw new Exception ('Refresh must be boolean or string (true, false, 1, 0)');
+		}
+	}
 
-    if ($timeout_flag) {
-        // handle the timeout event here
-        echo "Error: Timeout after $timeout seconds.";
-    }
-}
-// curl to connect server
-function connect($url, $para)
-{
-    if (empty($para)) {
-        return false;
-    }
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_HEADER, 0);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-    curl_setopt($ch, CURLOPT_POST, 1);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($para));
-    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 30);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-    $data = curl_exec($ch);
-    curl_close($ch);
-    return $data;
-}
+	public function setScreen($width_height)
+	{
+		if ($width_height == '0x0')
+		{
+			throw new Exception ('Width and height cannot both be 0 for '.__METHOD__);
+		}
+		else
+		{
+			$d = explode('x',$width_height);
+			
+			if (count($d) != 2 || preg_match("/[^\d]/",$d[0]) || preg_match("/[^\d]/",$d[1]) )
+			{
+				throw new Exception ('Input must be formatted WxH where W and H are non-negative integers for '.__METHOD__);
+			}
+		
+			$this->params['p2i_screen'] = $width_height;
+		}
+	}
 
-function call_p2i_with_callback()
-{
-    global $apikey, $api_url;
-    // URL can be those formats: http://www.google.com https://google.com google.com and www.google.com
-    $url = "http://www.google.com";
-    // 0 - iPhone4, 1 - iPhone5, 2 - Android, 3 - WinPhone, 4 - iPad, 5 - Android Pad, 6 - Desktop
-    $device = 0;
-
-    // you can pass us any parameters you like. We will pass it back.
-    // Please make sure http://your_server_domain/api_callback can handle our call
-    $callback_url = "http://your_server_domain/api_callback?image_id=your_unique_image_id_here";
-    $para = array(
-                "p2i_url" => $url,
-                "p2i_key" => $apikey,
-                "p2i_device" => $device
-            );
-    $response = connect($api_url, $para);
-
-    if (empty($response)) {
-        // Do whatever you think is right to handle the exception.
-    } else {
-        $json_data = json_decode($response);
-        if (empty($json_data->status)) {
-            // api error do something
-            echo "api error";
-        }else
-        {
-            //do anything
-            echo $json_data->status;
-        }
-    }
-
-}
-
-// This function demo how to handle the callback request
-function api_callback()
-{
-    if (! empty($_REQUEST["image_id"])) {
-        // do anything you want about the unique image id. We suggest to use it to identify which url you send to us since you can send 1,000 at one time.
-    }
-
-    if (! empty($_POST["result"])) {
-        $post_data = $_POST["result"];
-        $json_data = json_decode($post_data);
-        switch ($json_data->status) {
-            case "error":
-                // do something with error
-                echo $json_data->errno . " " . $json_data->msg;
-                break;
-            case "finished":
-                // do something with finished
-                echo $json_data->image_url;
-                // Or you can download the image from our server
-                break;
-            default:
-                break;
-        }
-    } else {
-        // Do whatever you think is right to handle the exception.
-        echo "Error: Empty";
-    }
+	public function setSize($width_height)
+	{
+		if ($width_height == '0x0')
+		{
+			throw new Exception ('Width and height cannot both be 0 for '.__METHOD__);
+		}
+		else
+		{
+			$d = explode('x',$width_height);
+			
+			if (count($d) != 2 || preg_match("/[^\d]/",$d[0]) || preg_match("/[^\d]/",$d[1]) )
+			{
+				throw new Exception ('Input must be formatted WxH where W and H are non-negative integers for '.__METHOD__);
+			}
+		
+			$this->params['p2i_size'] = $width_height;
+		}
+	}
+	
+	public function setUrl($url)
+	{
+		if (!is_string($url))
+		{
+			throw new Exception ('URL must be a string');
+		}
+		
+		$this->params['p2i_url'] = $url;
+	}
+	
+	public function setWait($seconds)
+	{
+		$i = floor($seconds);
+		
+		if (preg_match("/[^\d]/",$seconds) || ($i < 0 || $i > 25))
+		{
+			throw new Exception ('Wait must be an integer between 0 and 25 (strings accepted)');
+		}
+		
+		$this->params['p2i_wait'] = (string) $i;
+	}
+	
+	public function setQuality($quality)
+	{
+		$q = floor($quality);
+		
+		if ($q < 70 || $q > 95)
+		{
+			throw new Exception ('Quality must be 70-85 for png or 80-95 for jpg');
+		}
+		
+		$this->params['p2i_quality'] = $q;
+	}
 }
