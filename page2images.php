@@ -1,10 +1,13 @@
 <?php
 
-class page2image
+class page2images
 {
-	private $api_timeout = 120;
-	private $api_url     = 'http://api.page2images.com/restfullink';
-	private $params      = array();
+	private $api_timeout    = 120;
+	private $api_url        = 'http://api.page2images.com/restfullink';
+	private $params         = array();
+	private $callback_token = NULL;
+	private $callback_url   = NULL;
+	private $callback_vars  = array();
 	
 	function __construct($options_array = NULL)
 	{
@@ -14,9 +17,9 @@ class page2image
 		}
 	}
 	
-	private function checkRequiredParams()
+	private function checkParams()
 	{
-		// check required properties have been set
+		// check required parameters have been set
 		if (!$this->params['p2i_key'])
 		{
 			$missing[] = 'API key';
@@ -30,7 +33,7 @@ class page2image
 		if ($missing)
 		{
 			$list = implode(', ',$missing);
-			throw new Exception ('Call cannot be made, required properties are missing ('.$list.')');
+			throw new Exception ('Call cannot be made, required parameters are missing ('.$list.')');
 		}
 		
 		// if image quality is set, check it is within required ranges
@@ -68,96 +71,146 @@ class page2image
 		return $data;
 	}
 	
-	public function call($options_array = NULL, $reset = false)
+	private function prepareCallback()
+	{
+		$this->params['p2i_callback'] = $this->callback_url;
+		
+		if ($this->callback_token)
+		{
+			$add[] = 'page2images_callback_token='.urlencode($this->callback_token);
+		}
+		
+		if ($this->callback_vars)
+		{
+			foreach ($this->callback_vars as $k => $v)
+			{
+				$add[] = urlencode($k).'='.urlencode($v);
+			}
+		}
+		
+		if ($add)
+		{
+			$this->params['p2i_callback'] .= '?'.implode('&',$add);
+		}
+	}
+	
+	public function call($options_array = NULL, $clear = false)
 	{
 		if ($options_array)
 		{
-			$this->setOptions($options_array, $reset);
+			$this->setOptions($options_array, $clear);
 		}
 		
-		$this->checkRequiredParams();
-
-		// the code up to the end of this method is based on the sample code from http://www.page2images.com/REST-Web-Service-Interface
-		$loop_flag  = true;
-		$start_time = time();
-		set_time_limit($this->api_timeout+10);
+		$this->checkParams();
 		
-		while ($loop_flag)
+		if ($this->callback_url)
+		{
+			$this->prepareCallback();
+		}
+		else
+		{
+			// if callback is not being used, log start time and adjust timeout limit
+			$start_time = time();
+			set_time_limit($this->api_timeout+10);
+		}
+		
+		do
 		{
 			// We need to call the API until we get the screenshot or error message
 			$response = $this->curl();
 			
 			if (empty($response))
 			{
-				$loop_flag = false;
 				$error = 'The page2images API did not respond';
+				$finished = true;
 				break;
 			}
 			else
 			{
+				// API response could include the following,
+				//   status               - The status of the request (finished/processing/error)
+				//   estimated_need_time  - Estimated time needed to complete request
+				//   url                  - The location of the image that has been generated (valid for 24 hours)
+				//   duration             - How long the request took to process?
+				//   left_calls           - How many calls left in current billing period
+				//   ori_url              - URL sent to page2images
+				//   errno                - Error number
+				//   msg                  - A description of the error
 				$json_data = json_decode($response);
 				
-				if (empty($json_data->status))
+				switch ($json_data->status)
 				{
-					$loop_flag = false;
-					$error = 'The page2images API returned incomplete data (no status)';
-					break;
+					case 'error':
+						$error = 'The page2images API returned error #'.$json_data->errno.': '.$json_data->msg;
+						$finished = true;
+						break;
+					case 'finished':
+						$finished = true;
+						break;
+					case 'processing':
+						if ($this->params['p2i_callback'])
+						{
+							// no need to loop if callback is being used
+							$finished = true;
+						}
+						else if ((time() - $start_time) > $this->api_timeout)
+						{
+							$error = 'Request timeout after '.$this->api_timeout.' seconds';
+							$finished = true;
+						}
+						else
+						{
+							sleep(2);
+						}
+						break;
+					case '':
+						$error = 'The page2images API returned data but no status';
+						$finished = true;
+						break;
+					default:
+						$error = 'Unexpected status from page2images API: '.$json_data->status;
+						$finished = true;
 				}
 			}
-			
-			switch ($json_data->status)
-			{
-				case 'error':
-					$loop_flag = false;
-					$error = 'The page2images API returned error #'.$json_data->errno.': '.$json_data->msg;
-					break;
-				case 'finished':
-					$url = $json_data->image_url;
-					$loop_flag = false;
-					break;
-				case 'processing':
-				default:
-					if ((time() - $start_time) > $this->api_timeout)
-					{
-						$loop_flag = false;
-						$error = 'Request timeout after '.$this->api_timeout.' seconds';
-					}
-					else
-					{
-						sleep(2);
-					}
-					break;
-			}
 		}
-		
+		while(!$finished);
+	
 		if ($error)
 		{
-			$return->status = 'ERR';
-			$return->error  = $error;
+			$r['status']   = 'ERR';
+			$r['error']    = $error;
+			$r['request']  = $json_data->ori_url;
 		}
 		else
 		{
-			$return->status = 'OK';
-			$return->url    = $url;
+			$r['status']     = 'OK';
+			$r['callback']   = $this->params['p2i_callback'] ? '1' : '0';
+			$r['duration']   = $json_data->duration;
+			$r['remaining']  = $json_data->left_calls;
+			$r['request']    = $json_data->ori_url;
+			$r['url']        = $json_data->image_url;
 		}
-		
-		return $return;
+	
+		return $r;
 	}
 	
-	public function reset()
+	public function clearOptions()
 	{
-		// store the API key
+		// get the API key
 		$key = $this->params['p2i_key'];
 		
 		// re-declare the params array with only the API key
 		$this->params = array('p2i_key' => $key);
+		
+		// clear callback vars (URL and token are preserved)
+		$this->callback_vars = array();
 	}
 	
-	public function setOptions($options_array, $reset = false)
+	public function setOptions($options_array, $clear = false)
 	{
-		if ($reset == true)
+		if ($clear == true)
 		{
-			$this->reset();
+			$this->clearOptions();
 		}
 		
 		$a = $options_array;
@@ -165,7 +218,7 @@ class page2image
 		// check incoming
 		if (!is_array($a))
 		{
-			throw new Exception ('Input must be array for '.__METHOD__);
+			throw new Exception ('Options input must be array');
 		}
 		
 		// assign variables
@@ -178,6 +231,21 @@ class page2image
 		{
 			$this->setApiTimeout($a['api_timeout']);
 			unset($a['api_timeout']);
+		}
+		if (array_key_exists('callback_token',$a))
+		{
+			$this->setCallbackToken($a['callback_token']);
+			unset($a['callback_token']);
+		}
+		if (array_key_exists('callback_url',$a))
+		{
+			$this->setCallbackUrl($a['callback_url']);
+			unset($a['callback_url']);
+		}
+		if (array_key_exists('callback_vars',$a))
+		{
+			$this->setCallbackVars($a['callback_vars']);
+			unset($a['callback_vars']);
 		}
 		if (array_key_exists('device',$a))
 		{
@@ -235,7 +303,7 @@ class page2image
 			}
 			$list = implode(', ',$list);
 			
-			throw new Exception ('Input array contained unknown keys ('.$list.') for '.__METHOD__);
+			throw new Exception ('Options input array contained unknown keys ('.$list.')');
 		}
 	}
 	
@@ -259,6 +327,47 @@ class page2image
 		}
 		
 		$this->api_timeout = $s;
+	}
+	
+	public function setCallbackUrl($url)
+	{
+		if (!is_string($url))
+		{
+			throw new Exception ('Callback URL must be a string');
+		}
+		
+		$this->callback_url = $url;
+	}
+	
+	public function setCallbackToken($token)
+	{
+		if (!is_string($token))
+		{
+			throw new Exception ('Callback token must be a string');
+		}
+		
+		$this->callback_token = $token;
+	}
+	
+	public function setCallbackVars($callback_vars)
+	{
+		if (!is_array($callback_vars))
+		{
+			throw new Exception ('Callback vars must be array');
+		}
+		
+		foreach ($callback_vars as $k => $v)
+		{
+			if (!is_string($k) || !is_string($v))
+			{
+				throw new Exception ('Callback array keys and variables must be strings');
+			}
+			else if ($k == '')
+			{
+				throw new Exception ('Callback keys cannot be empty');
+			}
+			$this->callback_vars[$k] = $v;
+		}
 	}
 	
 	public function setDevice($device_id)
@@ -327,7 +436,7 @@ class page2image
 			
 			if (count($d) != 2 || preg_match("/[^\d]/",$d[0]) || preg_match("/[^\d]/",$d[1]) )
 			{
-				throw new Exception ('Input must be formatted WxH where W and H are non-negative integers for '.__METHOD__);
+				throw new Exception ('Screen must be formatted WxH where W and H are non-negative integers');
 			}
 		
 			$this->params['p2i_screen'] = $width_height;
@@ -346,7 +455,7 @@ class page2image
 			
 			if (count($d) != 2 || preg_match("/[^\d]/",$d[0]) || preg_match("/[^\d]/",$d[1]) )
 			{
-				throw new Exception ('Input must be formatted WxH where W and H are non-negative integers for '.__METHOD__);
+				throw new Exception ('Size must be formatted WxH where W and H are non-negative integers');
 			}
 		
 			$this->params['p2i_size'] = $width_height;
@@ -369,7 +478,7 @@ class page2image
 		
 		if (preg_match("/[^\d]/",$seconds) || ($i < 0 || $i > 25))
 		{
-			throw new Exception ('Wait must be an integer between 0 and 25 (strings accepted)');
+			throw new Exception ('Wait must be integer between 0 and 25 (strings accepted)');
 		}
 		
 		$this->params['p2i_wait'] = (string) $i;
@@ -381,9 +490,67 @@ class page2image
 		
 		if ($q < 70 || $q > 95)
 		{
-			throw new Exception ('Quality must be 70-85 for png or 80-95 for jpg');
+			throw new Exception ('Quality must be integer 70-85 for png or 80-95 for jpg (strings accepted)');
 		}
 		
 		$this->params['p2i_quality'] = $q;
+	}
+}
+
+class page2imagesCallbackHandler
+{	
+	private $token = NULL;
+	
+	function __construct($token = NULL)
+	{
+		if ($token)
+		{
+			$this->token = $token;
+		}
+	}
+	
+	public function run()
+	{
+		if ($this->token && $_GET['page2images_callback_token'] != $this->token)
+		{
+			return false;
+		}
+		else
+		{
+			$post_data = $_POST["result"];
+			$json_data = json_decode($post_data);
+			switch ($json_data->status)
+			{
+				case "error":
+					$r['status']   = 'ERR';
+					$r['duration'] = $json_data->duration;
+					$r['error']    = '#'.$json_data->errno.': '.$json_data->msg;
+					$r['request']  = urldecode($json_data->ori_url);
+					break;
+				case "finished":
+					$r['status']    = 'OK';
+					$r['duration']  = $json_data->duration;
+					$r['remaining'] = $json_data->left_calls;
+					$r['request']   = urldecode($json_data->ori_url);
+					$r['url']       = urldecode($json_data->image_url);
+					break;
+				default:
+					$r['status']   = 'ERR';
+					$r['error']    = 'Unrecoginsed data receievd by page2images handler';
+					break;
+			}
+			
+			if ($_GET)
+			{
+				unset($_GET['page2images_callback_token']);
+				
+				foreach ($_GET as $k => $v)
+				{
+					$r['passback'][$k] = $v;
+				}
+			}
+			
+			return $r;
+		}
 	}
 }
