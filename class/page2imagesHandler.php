@@ -28,9 +28,9 @@ class page2imagesHandler
 				$msg = 'Not enough credits in account';
 				break;
 			
-			case '403Account ha':
+			case '403Your accou':
 				$id  = '7';
-				$msg = 'Account has expired';
+				$msg = 'Account has expired or invalid API key';
 				break;
 			
 			case '403You are us':
