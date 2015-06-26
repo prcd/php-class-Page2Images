@@ -7,7 +7,7 @@
  */
 
 
-require 'class/page2imagesHandler.php';
+require '../class/page2imagesHandler.php';
 
 $p2iHandler = new page2imagesHandler('your_callback_token');// if you are using a token, declare it here
 

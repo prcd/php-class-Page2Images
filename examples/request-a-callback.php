@@ -8,7 +8,7 @@
  */
 
 
-require 'class/page2images.php';
+require '../class/page2images.php';
 
 $p2i = new page2images();
 
