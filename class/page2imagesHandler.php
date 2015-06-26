@@ -84,11 +84,12 @@ class page2imagesHandler
 			{
 				$res = $this->processApiError($json_data->errno,$json_data->msg);
 				
-				$r['status']   = 'ERR';
-				$r['error']    = $res['id'];
-				$r['message']  = $res['msg'];
-				$r['duration'] = $json_data->duration;
-				$r['request']  = urldecode($json_data->ori_url);
+				$r['status']       = 'ERR';
+				$r['error']        = $res['id'];
+				$r['message']      = $res['msg'];
+				$r['duration']     = $json_data->duration;
+				$r['request']      = urldecode($json_data->ori_url);
+				$r['api_response'] = $json_data;
 			}
 			
 			unset($_GET['page2images_callback_var_token']);

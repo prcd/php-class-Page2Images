@@ -25,11 +25,11 @@ if ($res = $p2iHandler->run())
 	
 	if ($res->status == 'OK')
 	{
-		$line[] = 'Everyting worked perfectly';
+		$line[] = 'Everything worked perfectly';
 		$line[] = '';
-		$line[] = 'URL:       '.$res->url;        // - where your image can be found (will be saved for 24 hours)
+		$line[] = 'URL:       '.$res->url;        // where your image can be found (will be saved for 24 hours)
 		$line[] = 'Duration:  '.$res->duration;   // how long the request took to process
-		$line[] = 'Remaining: '.$res->remaining;  // - page2images monthly credits remaining
+		$line[] = 'Remaining: '.$res->remaining;  // page2images monthly credits remaining
 	}
 	else
 	{
