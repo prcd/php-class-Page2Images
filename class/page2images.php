@@ -1,5 +1,8 @@
 <?php
 
+// Proceed Development Ltd
+// http://prcd.co 
+
 class page2images
 {
 	private $api_timeout         = NULL;
