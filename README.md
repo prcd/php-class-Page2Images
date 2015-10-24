@@ -6,4 +6,4 @@ I recently had a project where I needed screenshots of HTML templates I was gene
 
 Upload this folder and its contents to a server and try out the files in the example folder. The example files have explanation comments in them and can be set up in seconds.
 
-More examples and explanations can be found at http://prcd.co/page2images
+More examples and explanations can be found at http://prcd.co/75
